@@ -1,0 +1,471 @@
+---
+title: "Time Series Analysis 2020/2021 – Home Project #1"
+author: "Rafał Łobacz"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo    = FALSE, 
+                      cache   = TRUE,
+                      message = FALSE, 
+                      warning = FALSE)
+options(scipen = 10)
+```
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r message=FALSE, warning=FALSE}
+#Reading libraries
+library(tidyverse)
+library(lmtest)
+library(xts)
+library(forecast)
+library(vars)
+library(DescTools)
+
+source("testdf.R")
+
+```
+
+```{r message=FALSE,warning=FALSE}
+#Reading  data
+data = read.csv('data.csv')
+#changin date format
+data$date <- as.Date(data$date,format = "%Y-%m-%d")
+#creating xts variable
+data_xts <- xts(data[, -1], order.by = data$date)
+#splitting to train and test
+train_xts <- data_xts[1:290,]
+test_xts <- data_xts[291:300,]
+```
+
+# Abstract
+
+In this project I select one pair of cointegrated time series from 10 instruments using correlation and DF test. Then I fit the most appropriate ARIMA and VAR model for both series. Each instrument is forecasted for 10 next periods using fitted models. Based on RMSE and MAPE out of sample error measures, ARIMA(1,1,1) turned out to be a little bit better forecasting method in comparison to VAR(3) for both instruments. 
+
+# Introduction
+
+Goal of this analysis is to compare out of sample ARIMA and VAR forecasts.
+Data consists of 10 time series. Out of them we have to choose 2 that are cointegrated. For this purpose firstly I counted the correlations to choose potentially cointegrated pair of time series. Then to check if they are really cointegrated I run Dickey-Fuller test. After obtaining the pair of cointegrated series I fitted VAR and ARIMA models, and produced forecasts.
+
+# EDA 
+
+At the beginning we should perform some exploratory data analysis. In the table below we can see descriptive statistics like minimum, mean, maximum or standard deviation. 
+
+```{r}
+#descriptive statistics
+summary(train_xts)[,-1]%>%
+  rbind(paste0('Sd. :',round(sapply(train_xts, sd, na.rm=TRUE),1)))  %>%
+    kableExtra::kbl(digits = 3, caption = "Descriptive Statistics") %>%
+    kableExtra::kable_classic("striped", full_width = F)
+```
+
+Moreover we can plot histogram of each series. 
+
+```{r fig.width = 12, fig.height=8}
+#creating histograms
+psych::multi.hist(train_xts[,sapply(train_xts,is.numeric)],bcol='pink',dcol='purple')
+```
+
+We can see that some of them are quite similiar. For example y1 to y5 or y2 to y3, or y6 to y9. Maybe this indicate cointegration. Let`s now move to finding cointegrated pair part.
+
+# Finding pair of cointegrated time series
+
+In order to find cointegrated pair, Dickey-Fuller test should be performed. Good idea to choose just 2 out of 10 potential time series is to run correlations on their original and differentiated values.
+
+```{r  message=FALSE,warning=FALSE}
+#creating function to plot correlograms
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+  usr <- par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- abs(cor(x, y,use = "pairwise.complete.obs",method='kendall'))
+  txt <- format(c(r, 0.123456789), digits = digits)[1]
+  txt <- paste0(prefix, txt)
+  if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+  text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+```
+
+
+# {.tabset}
+
+## Correlogram
+
+```{r fig.align="center"}
+#plotting correlogram of train data
+pairs(coredata(train_xts),lower.panel = panel.cor,pch=20,col='purple')
+```
+
+## Diff Correlogram
+
+```{r fig.align="center"}
+#plotting correlogram of differentiated train data
+pairs(coredata(diff(train_xts)),lower.panel = panel.cor,pch=20,col='purple')
+```
+
+# {-}
+
+In the plot above we can see correlograms and kendall correlation coefficients. We can see that 4 pairs have quite big correlation - y1 and y5, y2 and y3, y6 and y9, y4 and y10. I am going to choose the pair that have the biggest coeffcient on differentiated series. It turned out to be y1 and y5.
+
+We can also plot them. We can see that they co-move. The only difference is that 5th time series is more volatile in comparison to 1st.
+
+# {.tabset}
+
+## Run chart
+
+```{r fig.align="center"}
+#plotting selected 1st and 5th instrument
+plot(train_xts[,c(1,5)],legend.loc = "topleft",main='Run chart of selected series')
+```
+
+## Diff Run chart
+
+```{r fig.align="center"}
+#plotting differentiated 1st and 5th instrument
+plot(diff(train_xts[,c(1,5)]),legend.loc = "topleft",main='Run chart of differentiated series')
+```
+
+# {-}
+
+Pair of series are cointegrated if they are integrated of the same order (d) and if there exists a linear combination of these variables, which is integrated of order d-b.
+To check if they are really cointegrated, we have to run dickey-fuller test on residuals of regression model. Results showed that they are. Non-stationarity of residuals is strongly rejected, so residuals are stationary, which means that 1st and 5th series are cointegrated.
+
+```{r}
+#building linear model 
+model.coint <- lm(train_xts[,1] ~ train_xts[,5])
+```
+
+# {.tabset}
+
+## Regression summary
+
+```{r}
+#printing summary of built model
+summary(model.coint)
+```
+
+## Residuals Run chart
+
+```{r fig.align="center",warning=FALSE}
+#running Dickey-Fuller test
+test_1 <- testdf(variable = residuals(model.coint), max.augmentations = 3)
+```
+
+## Table
+
+```{r warning=FALSE,message=FALSE}
+#printing DF test
+round(test_1,6) %>%
+  kableExtra::kbl(digits = 3) %>%
+  kableExtra::kable_classic("striped", full_width = F)
+```
+
+# {-}
+
+In regression summary tab we can see results of regressing 5th variable on 1st. Model and variable is statistically significant. Next we have run chart of model residuals. We can see that they are homoscedastic. In the table tab we see Dickey-Fuller test. Last column about Breusch–Godfrey test indicate that there is no autocorrelation in residuals. This means that we can trust p-value of D-F test, that tells us that we need to reject null hypothesis about non-stationarity. Concluding all results that we obtained, lead us to statement that this pair is cointegrated.\
+Having a chosen pair let`s move to finding the best Arima model.
+
+# Finding Arima models
+
+To find the most optimal Arima model I have chosen auto-arima approach. Using auto.arima() function many models were built. To choose the best one I used three information criteria: AIC, AICc and BIC. BIC in comparison to AIC tends to choose more parsimonous model. Let`s now fit auto.arima to 1st series.
+
+## 1st series
+
+ 
+```{r}
+#creating function to built arima model based on selected information criterium
+arima_own<- function(x,criteria){
+  auto.arima(x,
+             d = 1,             # parameter d of ARIMA model
+             max.p = 7,         # Maximum value of p
+             max.q = 7,         # Maximum value of q
+             max.order = 14,    # maximum p+q
+             start.p = 0,       # Starting value of p in stepwise procedure
+             start.q = 0,       # Starting value of q in stepwise procedure
+             ic = criteria,        # Information criterion to be used in model selection.
+             stepwise = FALSE,  # if FALSE considers all models
+             allowdrift = TRUE, # include a constant
+             trace = FALSE)      # show summary of all models considered
+}
+#fitting arima models for first serie
+arima_1_aic <- arima_own(train_xts[,1],"aic")
+arima_1_aicc <- arima_own(train_xts[,1],"aicc")
+arima_1_bic <- arima_own(train_xts[,1],"bic")
+#fitting arima models for fifth serie
+arima_5_aic <- arima_own(train_xts[,5],"aic")
+arima_5_aicc <- arima_own(train_xts[,5],"aicc")
+arima_5_bic <- arima_own(train_xts[,5],"bic")
+
+#creting RMSE function
+tscv_rmse <- function(x){
+  sqrt(mean(x^2, na.rm=TRUE))
+}
+# function to build ARIMA(3,1,1) and ARIMA(1,1,1)
+fun_1 <- function(x, h){forecast(Arima(x, order=c(3,1,1)), h=h)}
+fun_2 <- function(x, h){forecast(Arima(x, order=c(1,1,1)), h=h)}
+
+#cross validation to choose between ARIMA(3,1,1) and ARIMA(1,1,1)
+e_1_aic <- tsCV(train_xts[,1], fun_1, h=10)
+e_1_bic <- tsCV(train_xts[,1], fun_2, h=10)
+#counting RMSE of cross validation
+e_1_aic_rmse <- tscv_rmse(e_1_aic)
+e_1_bic_rmse <- tscv_rmse(e_1_bic)
+#creating matrix of results
+e_1_df <- rbind(e_1_aic_rmse,e_1_bic_rmse)
+rownames(e_1_df) <- c("ARIMA(3,1,1)","ARIMA(1,1,1)")
+colnames(e_1_df) <- "RMSE"
+#cross validation to choose between ARIMA(3,1,1) and ARIMA(1,1,1)
+e_5_aic <- tsCV(train_xts[,5], fun_1, h=10)
+e_5_bic <- tsCV(train_xts[,5], fun_2, h=10)
+#counting RMSE of cross validation
+e_5_aic_rmse <- tscv_rmse(e_5_aic)
+e_5_bic_rmse <- tscv_rmse(e_5_bic)
+#creating matrix of results
+e_5_df <- rbind(e_5_aic_rmse,e_5_bic_rmse)
+rownames(e_5_df) <- c("ARIMA(3,1,1)","ARIMA(1,1,1)")
+colnames(e_5_df) <- "RMSE"
+#forecating ARIMA models chosen by bic criterion
+fc_arima_1 <- forecast(arima_1_bic,10)
+ac_arima_1 <- accuracy(fc_arima_1,test_xts[,1]) 
+fc_arima_5 <- forecast(arima_5_bic,10)
+ac_arima_5 <- accuracy(fc_arima_5,test_xts[,5]) 
+
+```
+
+# {.tabset}
+
+## auto.arima AIC
+
+```{r }
+#printing model chosen by aic
+options(width = 600)
+summary(arima_1_aic)
+```
+
+## auto.arima AICc
+
+```{r fig.align="center",warning=FALSE}
+#printing model chosen by aicc
+options(width = 600)
+summary(arima_1_aicc)
+```
+
+## auto.arima BIC
+
+```{r warning=FALSE}
+#printing model chosen by bicc
+options(width = 600)
+summary(arima_1_bic)
+```
+
+# {-}
+
+In results above we can see that auto.arima using AIC and AICc have chosen the same model - ARIMA(3,1,1) while BIC ARIMA(1,1,1).\
+Let`s inspect their residuals using ACF plot and Ljung-Box test.
+
+# {.tabset}
+
+## ARIMA(3,1,1)
+
+```{r fig.align="center",warning=FALSE}
+# checking resiudals of aic model
+checkresiduals(arima_1_aic)
+```
+
+## ARIMA(1,1,1)
+
+```{r fig.align="center", warning=FALSE}
+# checking resiudals of bic model
+checkresiduals(arima_1_bic)
+```
+
+# {-}
+
+We can see that both of models are well specified. Looking at ACF plot there are no significant lags in both model. Their residuals resemble white noise and are more or less normally distributed. For both models we can not reject null hypotheses of Ljung-Box test, that says that there is no autocorrelation.\
+
+To choose the best model of those two I ran cross-validation on train data as our main goal is the best forecast. Cross-validation was counted using prof.Hyndman tsCV() function with 10 forecast horizon. 
+
+```{r }
+#printing cross validation results of 1st instrument
+e_1_df %>%
+  kableExtra::kbl(digits = 3, caption = "Cross Validation") %>%
+  kableExtra::kable_classic("striped", full_width = F)
+```
+
+Based on RMSE of cross-validation, ARIMA(1,1,1) is slightly better.
+
+## 5th series
+
+Same procedure was performed for 5th instrument.
+
+# {.tabset}       
+
+## auto.arima AIC
+
+```{r }
+#printing model chosen by aic
+options(width = 600)
+summary(arima_5_aic)
+```
+
+## auto.arima AICc
+
+```{r fig.align="center",warning=FALSE}
+#printing model chosen by aicc
+options(width = 600)
+summary(arima_5_aicc)
+```
+
+## auto.arima BIC
+
+```{r warning=FALSE}
+#printing model chosen by bic
+options(width = 600)
+summary(arima_5_bic)
+```
+
+# {-}
+
+Results are pretty much the same. Based on AIC and AICc, ARIMA(3,1,1) was the best, for BIC ARIMA(1,1,1).
+
+# {.tabset}
+
+## ARIMA(3,1,1)
+
+```{r fig.align="center",warning=FALSE}
+# checking resiudals of aic model
+checkresiduals(arima_5_aic)
+```
+
+## ARIMA(1,1,1)
+
+```{r fig.align="center", warning=FALSE}
+# checking resiudals of bic model
+checkresiduals(arima_5_bic)
+```
+
+# {-}
+
+Analysis of residuals tell us that there is significant 8 lag in residuals for both models. We can not reject null hypothesis in Ljung-Box test for both models and residuals look like white noise.\
+Let`s one more time decide upon best model using cross-validation.
+
+```{r }
+#printing cross validation results of 5th instrument
+e_5_df %>%
+  kableExtra::kbl(digits = 3, caption = "Cross Validation") %>%
+  kableExtra::kable_classic("striped", full_width = F)
+```
+
+Cross-validation one more time states that for 5th series ARIMA(1,1,1) is better.
+
+# Finding VAR model
+
+To select right VAR model I used VARselect function that returns information criteria and final prediction error for sequential increasing the lag order up to a VAR(p)-process. Different criteria give us different model but I decided to choose the one proposed by SC criterion. SC tends to select more parsimonious models and they usually are better at forecasting. VAR(3) was chosen.
+
+```{r}
+#selecting best VAR based on information criterions
+var_sel <- VARselect(train_xts[,c(1,5)], # input data for VAR
+                   lag.max = 7)     # maximum lag
+#var_aic <- VAR(train_xts[,c(1,5)],p=6)
+#fitting VAR(3)
+var_bic <- VAR(train_xts[,c(1,5)],p=3)
+#predicting VAR(3)
+var_predict <- predict(var_bic,n.ahead=10)
+
+#creating matrix of MAPE and RMSE results of forecasts of 1st instrument
+stat_1 <- cbind(rbind(MAPE(var_predict$fcst$y1[,1],test_xts[,1])*100,
+MAPE(fc_arima_1$mean[1:10],test_xts[,1])*100),
+rbind(RMSE(var_predict$fcst$y1[,1],test_xts[,1]),
+RMSE(fc_arima_1$mean[1:10],test_xts[,1])))
+colnames(stat_1) <- c("MAPE","RMSE")
+rownames(stat_1) <- c("VAR(3)","ARIMA(1,1,1)")
+#creating matrix of MAPE and RMSE results of forecasts of 5th instrument
+stat_5 <- cbind(rbind(MAPE(var_predict$fcst$y5[,1],test_xts[,5])*100,
+MAPE(fc_arima_5$mean[1:10],test_xts[,5])*100),
+rbind(RMSE(var_predict$fcst$y5[,1],test_xts[,5]),
+RMSE(fc_arima_5$mean[1:10],test_xts[,5])))
+colnames(stat_5) <- c("MAPE","RMSE")
+rownames(stat_5) <- c("VAR(3)","ARIMA(1,1,1)")
+
+#creating matrix of forecasts and test data for 1st instrument
+fc_1 <- var_predict$fcst$y1[,1]
+fc_1 <- cbind(fc_1,fc_arima_1$mean[1:10],test_xts[,1])
+colnames(fc_1) <- c("VAR","arima","test")
+df_1 <- train_xts[,1]
+df_1 <- cbind(df_1,fc_1)
+#creating matrix of forecasts and test data for 5th instrument
+fc_5 <- var_predict$fcst$y5[,1]
+fc_5 <- cbind(fc_5,fc_arima_5$mean[1:10],test_xts[,5])
+colnames(fc_5) <- c("VAR","arima","test")
+df_5 <- train_xts[,5]
+df_5 <- cbind(df_5,fc_5)
+```
+
+```{r}
+#printing VARSELECT results
+options(width = 600)
+var_sel
+```
+
+# {.tabset}
+
+# Forecasting
+
+To evaluate out of sample prediction I used RMSE and MAPE. In the table below we can see those statistics for first time series.
+
+## 1st
+
+```{r }
+#printing forecasting results for 1st instrument
+stat_1 %>%
+  kableExtra::kbl(digits = 3) %>%
+  kableExtra::kable_classic("striped", full_width = F)
+```
+
+ARIMA(1,1,1) produced a little bit better forecast. Both RMSE and MAPE is lower for ARIMA. Let`s look at 5th now.
+
+## 5th
+
+```{r }
+#printing forecasting results for 5th instrument
+stat_5 %>%
+  kableExtra::kbl(digits = 3) %>%
+  kableExtra::kable_classic("striped", full_width = F)
+```
+
+Results are similar. ARIMA(1,1,1) is better when we consider RMSE and MAPE.\
+Evaluating forecasts based only on numbers might be hard and even misleading. Let`s plot those forecasts with original out of sample data.
+
+# {-}
+
+# {.tabset}
+
+
+## 1st
+
+```{r fig.align="center"}
+#plotting 1st instrument forecasts
+plot(df_1[250:300],legend.loc = "topleft",main='Forecasts for 1st series')
+```
+
+## 5th
+
+```{r fig.align="center"}
+#plotting 5th instrument forecasts
+plot(df_5[250:300],legend.loc = "topleft",main='Forecasts for 5th series')
+```
+
+# {-}
+
+Looking at plots of forecasts, we can see that both methods produced poor forecast. They are far from original series. Test data rise drastically, while forecasts decay very fast and do not show almost any growth at all. That`s not a surprise. They converge to unconditional mean and should not be forecasted for 10 next periods in this situation. ARIMA should only be forecasted for next max(p,q) periods. After that it converge to unconditional mean.
+
+# Summary
+
+Goal of this project was to firstly find cointegrated pair of time series, it was easily done using correlation analysis and then confirmed using Dickey-Fuller test. After that, VAR(3) and ARIMA(1,1,1) models were fitted. We had to evaluate their forecasts for the next 10 observations. ARIMA model produced a little bit better prediction but looking at test values, both of them performed poorly. Using those specific fitted models we should not forecast for 10 next periods. 
+
+
